@@ -1,6 +1,6 @@
 Package: frontmatter
 Title: Parse Front Matter from Documents
-Version: 0.1.0
+Version: 0.2.0
 Authors@R: c(
     person("Garrick", "Aden-Buie", , "garrick@posit.co", role = c("aut", "cre"),
            comment = c(ORCID = "0000-0002-7111-0077")),
@@ -20,14 +20,15 @@ BugReports: https://github.com/posit-dev/frontmatter/issues
 Imports: cpp11, rlang, tomledit, yaml12
 Suggests: testthat (>= 3.0.0), withr, yaml
 LinkingTo: cpp11
+Config/Needs/website: brand.yml
 Config/testthat/edition: 3
 Encoding: UTF-8
 RoxygenNote: 7.3.3
 NeedsCompilation: yes
-Packaged: 2026-01-09 21:04:09 UTC; garrick
+Packaged: 2026-02-09 19:32:24 UTC; garrick
 Author: Garrick Aden-Buie [aut, cre] (ORCID:
     <https://orcid.org/0000-0002-7111-0077>),
   Posit Software, PBC [cph, fnd] (ROR: <https://ror.org/03wc8by49>)
 Maintainer: Garrick Aden-Buie <garrick@posit.co>
 Repository: CRAN
-Date/Publication: 2026-01-14 18:10:07 UTC
+Date/Publication: 2026-02-09 19:50:02 UTC

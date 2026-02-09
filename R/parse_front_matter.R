@@ -106,16 +106,56 @@ parse_front_matter <- function(text, parse_yaml = NULL, parse_toml = NULL) {
   }
 
   parsed_data <- switch(
-    result$fence_type,
+    result$format,
     yaml = parse_yaml(result$content),
     toml = parse_toml(result$content),
     NULL
   )
 
-  list(
+  # Strip trailing newline from body to match readLines() convention
+  # format_front_matter() adds a trailing newline, so parse_front_matter()
+  # strips it. Strip \n or \r\n (CRLF), but not bare \r
+  body <- result$body
+  if (!is.null(body) && nzchar(body)) {
+    if (substring(body, nchar(body)) == "\n") {
+      body <- substring(body, 1, nchar(body) - 1)
+
+      # Handle CRLF: trailing \n proceeded by \r
+      if (nzchar(body) && substring(body, nchar(body)) == "\r") {
+        body <- substring(body, 1, nchar(body) - 1)
+      }
+    }
+  }
+
+  ret <- list(
     data = parsed_data,
-    body = result$body
+    body = body
   )
+  attr(ret, "format") <- result$format
+  attr(ret, "fence_type") <- result$fence_type
+
+  structure(ret, class = "front_matter")
+}
+
+#' @export
+print.front_matter <- function(x, ...) {
+  cat(sprintf(
+    "<front_matter format=\"%s\", delimiter=\"%s\">\n",
+    attr(x, "format"),
+    attr(x, "fence_type")
+  ))
+
+  cat_h2("$data")
+  print(x$data)
+  cat("\n")
+  cat_h2("$body")
+  cat(x$body, "\n")
+  invisible(x)
+}
+
+cat_h2 <- function(x) {
+  line <- strrep("\u2500", 4)
+  cat(sprintf("%s %s %s\n", line, x, line))
 }
 
 #' @describeIn parse_front_matter Parse front matter from a file.

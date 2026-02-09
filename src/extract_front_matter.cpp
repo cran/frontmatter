@@ -276,25 +276,26 @@ size_t find_comment_closing_fence(const char* str, size_t start_pos, size_t len,
   return 0;
 }
 
-// Helper: Trim leading comment lines and unwrap if continuous (for comment-wrapped formats)
+// Helper: Trim leading blank/comment-only lines (for comment-wrapped formats)
+// Only removes separator lines like "#" or "#'" - body is returned unchanged
 std::string trim_leading_comment_lines(const std::string& body, const char* prefix) {
   const char* data = body.data();
   size_t pos = 0;
   size_t len = body.length();
   size_t prefix_len = strlen(prefix);
-  bool had_blank_line = false;
 
-  // First, skip leading empty lines and bare comment lines
+  // Skip leading empty lines and bare comment lines (separator lines)
   while (pos < len) {
-    // Skip whitespace
+    size_t line_start = pos;
+
+    // Skip whitespace at start of line
     while (pos < len && is_whitespace(data[pos])) {
       pos++;
     }
 
     // Check if line is empty (just whitespace + newline)
     if (pos >= len || data[pos] == '\n' || (data[pos] == '\r' && pos + 1 < len && data[pos + 1] == '\n')) {
-      // Empty line
-      had_blank_line = true;
+      // Empty line - skip it
       if (pos < len) {
         if (data[pos] == '\r') pos += 2;
         else pos++;
@@ -302,17 +303,17 @@ std::string trim_leading_comment_lines(const std::string& body, const char* pref
       continue;
     }
 
-    // Check if line is just the comment prefix (e.g., "#'" or "# " with nothing after)
-    if (pos + prefix_len <= len && memcmp(data + pos, prefix, prefix_len) == 0) {
-      size_t after_prefix = pos + prefix_len;
-      // Skip any remaining whitespace
-      while (after_prefix < len && is_whitespace(data[after_prefix])) {
-        after_prefix++;
+    // Check if line is a bare comment character (e.g., "#" or "#'")
+    // For "# " prefix, check for bare "#"
+    if (prefix_len == 2 && prefix[0] == '#' && prefix[1] == ' ' && data[pos] == '#') {
+      size_t check_pos = pos + 1;
+      // Skip optional whitespace after bare #
+      while (check_pos < len && is_whitespace(data[check_pos])) {
+        check_pos++;
       }
-      // If line ends here, it's just a bare comment line - skip it
-      if (after_prefix >= len || data[after_prefix] == '\n' || (data[after_prefix] == '\r' && after_prefix + 1 < len && data[after_prefix + 1] == '\n')) {
-        // Skip to next line
-        pos = after_prefix;
+      if (check_pos >= len || data[check_pos] == '\n' || (data[check_pos] == '\r' && check_pos + 1 < len && data[check_pos + 1] == '\n')) {
+        // It's bare "#" - skip it
+        pos = check_pos;
         if (pos < len) {
           if (data[pos] == '\r') pos += 2;
           else if (data[pos] == '\n') pos++;
@@ -321,18 +322,31 @@ std::string trim_leading_comment_lines(const std::string& body, const char* pref
       }
     }
 
-    // Found a non-empty line - check if we should unwrap
-    break;
+    // For "#' " prefix, check for bare "#'"
+    if (prefix_len == 3 && prefix[0] == '#' && prefix[1] == '\'' && prefix[2] == ' ' &&
+        pos + 2 <= len && data[pos] == '#' && data[pos + 1] == '\'') {
+      size_t check_pos = pos + 2;
+      // Skip optional whitespace after bare #'
+      while (check_pos < len && is_whitespace(data[check_pos])) {
+        check_pos++;
+      }
+      if (check_pos >= len || data[check_pos] == '\n' || (data[check_pos] == '\r' && check_pos + 1 < len && data[check_pos + 1] == '\n')) {
+        // It's bare "#'" - skip it
+        pos = check_pos;
+        if (pos < len) {
+          if (data[pos] == '\r') pos += 2;
+          else if (data[pos] == '\n') pos++;
+        }
+        continue;
+      }
+    }
+
+    // Found a non-separator line - return from here unchanged
+    return body.substr(line_start);
   }
 
-  // If we hit a blank line before reaching content, don't unwrap
-  if (had_blank_line || pos >= len) {
-    return pos < len ? body.substr(pos) : "";
-  }
-
-  // No blank line - body content is continuous with front matter, so unwrap it
-  std::string remaining = body.substr(pos);
-  return unwrap_comments(remaining, prefix);
+  // Entire body was separator lines
+  return "";
 }
 
 // Helper: Check if line starts with PEP 723 opening delimiter
@@ -378,6 +392,7 @@ list extract_pep723(const std::string& text) {
   // Check for opening at position 0
   if (!is_pep723_opening(str, 0, len)) {
     result.push_back({"found"_nm = false});
+    result.push_back({"format"_nm = "none"});
     result.push_back({"fence_type"_nm = "none"});
     result.push_back({"content"_nm = ""});
     result.push_back({"body"_nm = text});
@@ -405,11 +420,13 @@ list extract_pep723(const std::string& text) {
       std::string body;
       if (body_start < len) {
         body = text.substr(body_start);
-        body = trim_leading_empty_lines(body);
+        // Use trim_leading_comment_lines to handle bare "#" separator lines
+        body = trim_leading_comment_lines(body, "# ");
       }
 
       result.push_back({"found"_nm = true});
-      result.push_back({"fence_type"_nm = "toml"});
+      result.push_back({"format"_nm = "toml"});
+      result.push_back({"fence_type"_nm = "toml_pep723"});
       result.push_back({"content"_nm = content});
       result.push_back({"body"_nm = body});
       return result;
@@ -419,6 +436,7 @@ list extract_pep723(const std::string& text) {
     if (str[pos] != '#') {
       // Invalid PEP 723 block
       result.push_back({"found"_nm = false});
+      result.push_back({"format"_nm = "none"});
       result.push_back({"fence_type"_nm = "none"});
       result.push_back({"content"_nm = ""});
       result.push_back({"body"_nm = text});
@@ -429,6 +447,7 @@ list extract_pep723(const std::string& text) {
     if (pos + 1 < len && str[pos + 1] != '\n' && str[pos + 1] != '\r' && str[pos + 1] != ' ') {
       // Invalid: no space after #
       result.push_back({"found"_nm = false});
+      result.push_back({"format"_nm = "none"});
       result.push_back({"fence_type"_nm = "none"});
       result.push_back({"content"_nm = ""});
       result.push_back({"body"_nm = text});
@@ -441,6 +460,7 @@ list extract_pep723(const std::string& text) {
 
   // No closing delimiter found
   result.push_back({"found"_nm = false});
+  result.push_back({"format"_nm = "none"});
   result.push_back({"fence_type"_nm = "none"});
   result.push_back({"content"_nm = ""});
   result.push_back({"body"_nm = text});
@@ -457,6 +477,7 @@ list extract_front_matter_cpp(std::string text) {
   // Empty string
   if (len == 0) {
     result.push_back({"found"_nm = false});
+    result.push_back({"format"_nm = "none"});
     result.push_back({"fence_type"_nm = "none"});
     result.push_back({"content"_nm = ""});
     result.push_back({"body"_nm = ""});
@@ -470,6 +491,7 @@ list extract_front_matter_cpp(std::string text) {
 
   // Check for opening fence at position 0
   const char* fence_chars = nullptr;
+  std::string format;
   std::string fence_type;
   const char* comment_prefix = nullptr;
   size_t opening_end = 0;
@@ -485,7 +507,13 @@ list extract_front_matter_cpp(std::string text) {
     }
     if (check_pos >= len || is_newline(str, check_pos, len)) {
       fence_chars = "---";
-      fence_type = "yaml";
+      format = "yaml";
+      // Determine fence_type based on prefix: "# " -> yaml_comment, "#' " -> yaml_roxy
+      if (strcmp(comment_prefix, "# ") == 0) {
+        fence_type = "yaml_comment";
+      } else {
+        fence_type = "yaml_roxy";
+      }
       is_comment_wrapped = true;
       opening_end = skip_to_next_line(str, 0, len);
     }
@@ -501,7 +529,13 @@ list extract_front_matter_cpp(std::string text) {
       }
       if (check_pos >= len || is_newline(str, check_pos, len)) {
         fence_chars = "+++";
-        fence_type = "toml";
+        format = "toml";
+        // Determine fence_type based on prefix: "# " -> toml_comment, "#' " -> toml_roxy
+        if (strcmp(comment_prefix, "# ") == 0) {
+          fence_type = "toml_comment";
+        } else {
+          fence_type = "toml_roxy";
+        }
         is_comment_wrapped = true;
         opening_end = skip_to_next_line(str, 0, len);
       }
@@ -513,6 +547,7 @@ list extract_front_matter_cpp(std::string text) {
     opening_end = validate_fence(str, 0, len, "---", true);
     if (opening_end > 0) {
       fence_chars = "---";
+      format = "yaml";
       fence_type = "yaml";
     }
   }
@@ -522,6 +557,7 @@ list extract_front_matter_cpp(std::string text) {
     opening_end = validate_fence(str, 0, len, "+++", true);
     if (opening_end > 0) {
       fence_chars = "+++";
+      format = "toml";
       fence_type = "toml";
     }
   }
@@ -529,6 +565,7 @@ list extract_front_matter_cpp(std::string text) {
   // No valid opening fence found
   if (!fence_chars) {
     result.push_back({"found"_nm = false});
+    result.push_back({"format"_nm = "none"});
     result.push_back({"fence_type"_nm = "none"});
     result.push_back({"content"_nm = ""});
     result.push_back({"body"_nm = text});
@@ -548,6 +585,7 @@ list extract_front_matter_cpp(std::string text) {
   if (closing_start == 0) {
     // No valid closing fence found or limits exceeded
     result.push_back({"found"_nm = false});
+    result.push_back({"format"_nm = "none"});
     result.push_back({"fence_type"_nm = "none"});
     result.push_back({"content"_nm = ""});
     result.push_back({"body"_nm = text});
@@ -578,6 +616,7 @@ list extract_front_matter_cpp(std::string text) {
   }
 
   result.push_back({"found"_nm = true});
+  result.push_back({"format"_nm = format});
   result.push_back({"fence_type"_nm = fence_type});
   result.push_back({"content"_nm = content});
   result.push_back({"body"_nm = body});
