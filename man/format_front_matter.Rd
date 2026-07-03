@@ -7,7 +7,7 @@
 \usage{
 format_front_matter(
   x,
-  delimiter = "yaml",
+  delimiter = NULL,
   format = "auto",
   format_yaml = NULL,
   format_toml = NULL
@@ -16,7 +16,7 @@ format_front_matter(
 write_front_matter(
   x,
   path = NULL,
-  delimiter = "yaml",
+  delimiter = NULL,
   ...,
   format = "auto",
   format_yaml = NULL,
@@ -31,7 +31,11 @@ and \code{body} contains the document content (can be \code{NULL} or empty).}
 
 \item{delimiter}{A character string specifying the fence style, or a
 character vector for custom delimiters. See \strong{Delimiter Formats} for
-available options.}
+available options. When \code{NULL} (the default), the delimiter is inferred
+automatically: if \code{x} was returned by \code{\link[=parse_front_matter]{parse_front_matter()}} or
+\code{\link[=read_front_matter]{read_front_matter()}}, the original fence style is preserved; otherwise
+\code{write_front_matter()} falls back to the file extension of \code{path}, and
+finally to \code{"yaml"}.}
 
 \item{format}{The serialization format: \code{"auto"} (detect from delimiter),
 \code{"yaml"}, or \code{"toml"}. Usually auto-detection works well.}
@@ -80,6 +84,12 @@ matter. You can use these built-in shortcuts:\tabular{lllll}{
    \code{"yaml_roxy"} \tab YAML \tab \verb{#' ---} \tab \verb{#' ---} \tab Roxygen2 documentation \cr
    \code{"toml_roxy"} \tab TOML \tab \verb{#' +++} \tab \verb{#' +++} \tab Roxygen2 documentation \cr
    \code{"toml_pep723"} \tab TOML \tab \verb{# /// script} \tab \verb{# ///} \tab Python PEP 723 inline metadata \cr
+   \code{"yaml_sql_line"} \tab YAML \tab \verb{-- ---} \tab \verb{-- ---} \tab SQL scripts (line comments) \cr
+   \code{"toml_sql_line"} \tab TOML \tab \verb{-- +++} \tab \verb{-- +++} \tab SQL scripts (line comments) \cr
+   \code{"yaml_sql_block_compact"} \tab YAML \tab \verb{/* ---} \tab \verb{--- */} \tab SQL scripts (block comments) \cr
+   \code{"toml_sql_block_compact"} \tab TOML \tab \verb{/* +++} \tab \verb{+++ */} \tab SQL scripts (block comments) \cr
+   \code{"yaml_sql_block_expanded"} \tab YAML \tab \verb{/*} + \verb{---} \tab \verb{---} + \verb{*/} \tab SQL scripts (block comments) \cr
+   \code{"toml_sql_block_expanded"} \tab TOML \tab \verb{/*} + \verb{+++} \tab \verb{+++} + \verb{*/} \tab SQL scripts (block comments) \cr
 }
 
 
@@ -95,7 +105,7 @@ For custom delimiters, pass a character vector of length 1, 2, or 3:
 
 
 By default, the package uses \code{\link[yaml12:format_yaml]{yaml12::format_yaml()}} for YAML and
-\code{\link[tomledit:write]{tomledit::to_toml()}} for TOML. You can provide custom formatter functions
+\code{\link[tomledit:to_toml]{tomledit::to_toml()}} for TOML. You can provide custom formatter functions
 via \code{format_yaml} and \code{format_toml} to override these defaults.
 
 Custom formatters must accept an R object and return a character string
@@ -121,9 +131,26 @@ The option takes precedence over the environment variable. Valid values are
 
 Documents formatted with these functions can be read back with
 \code{\link[=parse_front_matter]{parse_front_matter()}} or \code{\link[=read_front_matter]{read_front_matter()}}. For comment-prefixed
-formats (like \code{yaml_comment} or \code{yaml_roxy}), a separator line is
-automatically inserted between the closing fence and the body when the body
-starts with the same comment prefix, ensuring clean roundtrip behavior.
+formats (like \code{yaml_comment}, \code{yaml_roxy}, or \code{yaml_sql_line}), a separator
+line is automatically inserted between the closing fence and the body when
+the body starts with the same comment prefix, ensuring clean roundtrip
+behavior.
+
+When \code{delimiter} is \code{NULL} (the default), the delimiter is inferred
+automatically, making roundtrips seamless:
+\itemize{
+\item \code{format_front_matter()} uses the \code{fence_type} attribute preserved by
+\code{\link[=parse_front_matter]{parse_front_matter()}} and \code{\link[=read_front_matter]{read_front_matter()}}, so the output uses the
+same fence style as the original document.
+\item \code{write_front_matter()} additionally falls back to a built-in
+extension-to-delimiter map when the input has no \code{fence_type} attribute:
+}\tabular{ll}{
+   Extension \tab Default delimiter \cr
+   \code{.sql} \tab \code{"yaml_sql_block_compact"} \cr
+   \code{.py} \tab \code{"toml_pep723"} \cr
+   \code{.R} \tab \code{"yaml_roxy"} \cr
+   \code{.md}, \code{.qmd}, \code{.Rmd} \tab \code{"yaml"} \cr
+}
 }
 
 \examples{
@@ -133,10 +160,10 @@ doc <- list(
   body = "Document content goes here."
 )
 
-# Format as a string
+# Format as a string (delimiter inferred from fence_type attr, falls back to yaml)
 format_front_matter(doc)
 
-# Write to a file
+# Write to a file (delimiter inferred from .md extension -> yaml)
 tmp <- tempfile(fileext = ".md")
 write_front_matter(doc, tmp)
 readLines(tmp)
@@ -144,25 +171,30 @@ readLines(tmp)
 # Print to console (when path is NULL)
 write_front_matter(doc)
 
-# Use TOML format
+# Use TOML format explicitly
 format_front_matter(doc, delimiter = "toml")
 
-# Use comment-wrapped format for R scripts
+# Use comment-wrapped format for R scripts explicitly
 r_script <- list(
   data = list(title = "Analysis Script"),
   body = "# Load libraries\nlibrary(dplyr)"
 )
 format_front_matter(r_script, delimiter = "yaml_comment")
 
-# Roundtrip example: read, modify, write
-original <- "---
-title: Original
----
-Content here"
+# Write to an R file: delimiter inferred from .R extension -> yaml_roxy
+tmp_r <- tempfile(fileext = ".R")
+write_front_matter(r_script, tmp_r)
+readLines(tmp_r)
+
+# Roundtrip: delimiter is automatically preserved from the original format
+original <- "# ---
+# title: Original
+# ---
+# R code here"
 
 doc <- parse_front_matter(original)
 doc$data$title <- "Modified"
-format_front_matter(doc)
+format_front_matter(doc) # uses yaml_comment, matching the source
 
 }
 \seealso{

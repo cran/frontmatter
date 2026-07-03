@@ -20,6 +20,12 @@
 #' | `"yaml_roxy"` | YAML | `#' ---` | `#' ---` | Roxygen2 documentation |
 #' | `"toml_roxy"` | TOML | `#' +++` | `#' +++` | Roxygen2 documentation |
 #' | `"toml_pep723"` | TOML | `# /// script` | `# ///` | Python PEP 723 inline metadata |
+#' | `"yaml_sql_line"` | YAML | `-- ---` | `-- ---` | SQL scripts (line comments) |
+#' | `"toml_sql_line"` | TOML | `-- +++` | `-- +++` | SQL scripts (line comments) |
+#' | `"yaml_sql_block_compact"` | YAML | `/* ---` | `--- */` | SQL scripts (block comments) |
+#' | `"toml_sql_block_compact"` | TOML | `/* +++` | `+++ */` | SQL scripts (block comments) |
+#' | `"yaml_sql_block_expanded"` | YAML | `/*` + `---` | `---` + `*/` | SQL scripts (block comments) |
+#' | `"toml_sql_block_expanded"` | TOML | `/*` + `+++` | `+++` + `*/` | SQL scripts (block comments) |
 #'
 #' For custom delimiters, pass a character vector of length 1, 2, or 3:
 #' - **Length 1**: Used as both opener and closer, with no line prefix
@@ -50,9 +56,26 @@
 #'
 #' Documents formatted with these functions can be read back with
 #' [parse_front_matter()] or [read_front_matter()]. For comment-prefixed
-#' formats (like `yaml_comment` or `yaml_roxy`), a separator line is
-#' automatically inserted between the closing fence and the body when the body
-#' starts with the same comment prefix, ensuring clean roundtrip behavior.
+#' formats (like `yaml_comment`, `yaml_roxy`, or `yaml_sql_line`), a separator
+#' line is automatically inserted between the closing fence and the body when
+#' the body starts with the same comment prefix, ensuring clean roundtrip
+#' behavior.
+#'
+#' When `delimiter` is `NULL` (the default), the delimiter is inferred
+#' automatically, making roundtrips seamless:
+#'
+#' - `format_front_matter()` uses the `fence_type` attribute preserved by
+#'   [parse_front_matter()] and [read_front_matter()], so the output uses the
+#'   same fence style as the original document.
+#' - `write_front_matter()` additionally falls back to a built-in
+#'   extension-to-delimiter map when the input has no `fence_type` attribute:
+#'
+#' | Extension | Default delimiter |
+#' |-----------|------------------|
+#' | `.sql` | `"yaml_sql_block_compact"` |
+#' | `.py` | `"toml_pep723"` |
+#' | `.R` | `"yaml_roxy"` |
+#' | `.md`, `.qmd`, `.Rmd` | `"yaml"` |
 #'
 #' @examples
 #' # Create a document with YAML front matter
@@ -61,10 +84,10 @@
 #'   body = "Document content goes here."
 #' )
 #'
-#' # Format as a string
+#' # Format as a string (delimiter inferred from fence_type attr, falls back to yaml)
 #' format_front_matter(doc)
 #'
-#' # Write to a file
+#' # Write to a file (delimiter inferred from .md extension -> yaml)
 #' tmp <- tempfile(fileext = ".md")
 #' write_front_matter(doc, tmp)
 #' readLines(tmp)
@@ -72,25 +95,30 @@
 #' # Print to console (when path is NULL)
 #' write_front_matter(doc)
 #'
-#' # Use TOML format
+#' # Use TOML format explicitly
 #' format_front_matter(doc, delimiter = "toml")
 #'
-#' # Use comment-wrapped format for R scripts
+#' # Use comment-wrapped format for R scripts explicitly
 #' r_script <- list(
 #'   data = list(title = "Analysis Script"),
 #'   body = "# Load libraries\nlibrary(dplyr)"
 #' )
 #' format_front_matter(r_script, delimiter = "yaml_comment")
 #'
-#' # Roundtrip example: read, modify, write
-#' original <- "---
-#' title: Original
-#' ---
-#' Content here"
+#' # Write to an R file: delimiter inferred from .R extension -> yaml_roxy
+#' tmp_r <- tempfile(fileext = ".R")
+#' write_front_matter(r_script, tmp_r)
+#' readLines(tmp_r)
+#'
+#' # Roundtrip: delimiter is automatically preserved from the original format
+#' original <- "# ---
+#' # title: Original
+#' # ---
+#' # R code here"
 #'
 #' doc <- parse_front_matter(original)
 #' doc$data$title <- "Modified"
-#' format_front_matter(doc)
+#' format_front_matter(doc) # uses yaml_comment, matching the source
 #'
 #' @param x A list with `data` and `body` elements, typically as returned by
 #'   [parse_front_matter()] or [read_front_matter()]. The `data` element
@@ -99,7 +127,11 @@
 #'
 #' @param delimiter A character string specifying the fence style, or a
 #'   character vector for custom delimiters. See **Delimiter Formats** for
-#'   available options.
+#'   available options. When `NULL` (the default), the delimiter is inferred
+#'   automatically: if `x` was returned by [parse_front_matter()] or
+#'   [read_front_matter()], the original fence style is preserved; otherwise
+#'   `write_front_matter()` falls back to the file extension of `path`, and
+#'   finally to `"yaml"`.
 #'
 #' @param format The serialization format: `"auto"` (detect from delimiter),
 #'   `"yaml"`, or `"toml"`. Usually auto-detection works well.
@@ -121,7 +153,7 @@
 #' @export
 format_front_matter <- function(
   x,
-  delimiter = "yaml",
+  delimiter = NULL,
   format = "auto",
   format_yaml = NULL,
   format_toml = NULL
@@ -132,6 +164,7 @@ format_front_matter <- function(
     )
   }
   check_character(x$body, allow_null = TRUE)
+  delimiter <- infer_delimiter(delimiter, x)
   check_character(delimiter, allow_na = FALSE)
   check_function(format_yaml, allow_null = TRUE)
   check_function(format_toml, allow_null = TRUE)
@@ -149,7 +182,26 @@ format_front_matter <- function(
   body <- x$body
   closer <- delimiter[3]
   space_line <- NULL
+  shebang <- NULL
   data <- c()
+
+  # Pre-detect shebang for comment-prefixed delimiters so that space_line is
+  # computed against the post-shebang body (applied only when data is non-null)
+  body_main <- body
+  potential_shebang <- NULL
+  is_script_prefix <- prefix %in% c("# ", "#' ", "-- ")
+  if (
+    is_script_prefix && !is.null(body) && nzchar(body) && startsWith(body, "#!")
+  ) {
+    nl_pos <- regexpr("\n", body, fixed = TRUE)
+    if (nl_pos > 0) {
+      potential_shebang <- sub("\r$", "", substring(body, 1, nl_pos - 1))
+      body_main <- substring(body, nl_pos + 1)
+    } else {
+      potential_shebang <- body
+      body_main <- NULL
+    }
+  }
 
   if (!is.null(x$data)) {
     data <- switch(
@@ -168,9 +220,21 @@ format_front_matter <- function(
     if (nzchar(data)) {
       space_line <- ""
 
-      if (!is.null(body) && !identical(prefix, "")) {
-        if (substring(body, 1, nchar(prefix)) == prefix) {
-          space_line <- trimws(prefix, "right")
+      body_for_spaceline <- if (!is.null(potential_shebang)) body_main else body
+      if (!is.null(body_for_spaceline) && !identical(prefix, "")) {
+        trimmed <- trimws(prefix, "right")
+        starts_with_prefix <- substring(body_for_spaceline, 1, nchar(prefix)) ==
+          prefix
+        starts_with_bare <- grepl(
+          paste0(
+            "^",
+            gsub("([.|()\\^{}+$*?]|\\[|\\])", "\\\\\\1", trimmed),
+            "[ \t]*(\r?\n|$)"
+          ),
+          body_for_spaceline
+        )
+        if (starts_with_prefix || starts_with_bare) {
+          space_line <- trimmed
         }
       }
     }
@@ -180,10 +244,17 @@ format_front_matter <- function(
     }
   }
 
+  # Apply shebang: move to top when writing front matter
+  if (!is.null(data) && !is.null(potential_shebang)) {
+    shebang <- potential_shebang
+    body <- body_main
+  }
+
   lines <- if (is.null(data)) {
     body
   } else {
     c(
+      shebang,
       opener,
       if (nzchar(prefix)) paste0(prefix, data) else data,
       closer,
@@ -214,15 +285,16 @@ format_front_matter <- function(
 write_front_matter <- function(
   x,
   path = NULL,
-  delimiter = "yaml",
+  delimiter = NULL,
   ...,
   format = "auto",
   format_yaml = NULL,
   format_toml = NULL
 ) {
+  ext <- if (!is.null(path)) tools::file_ext(path) else NULL
   content <- format_front_matter(
     x = x,
-    delimiter = delimiter,
+    delimiter = infer_delimiter(delimiter, x, ext),
     format = format,
     format_yaml = format_yaml,
     format_toml = format_toml
@@ -246,6 +318,12 @@ normalize_delimiter <- function(delimiter) {
       yaml_roxy = c("#' ---", "#' "),
       toml_roxy = c("#' +++", "#' "),
       toml_pep723 = c("# /// script", "# ", "# ///"),
+      yaml_sql_line = c("-- ---", "-- "),
+      toml_sql_line = c("-- +++", "-- "),
+      yaml_sql_block_compact = c("/* ---", "", "--- */"),
+      toml_sql_block_compact = c("/* +++", "", "+++ */"),
+      yaml_sql_block_expanded = c("/*\n---", "", "---\n*/"),
+      toml_sql_block_expanded = c("/*\n+++", "", "+++\n*/"),
       delimiter
     )
   }
@@ -286,4 +364,31 @@ is_yaml_delimiter <- function(delimiter) {
 
 is_toml_delimiter <- function(delimiter) {
   grepl("\\+\\+\\+$", delimiter[1]) || grepl("/// script$", delimiter[1])
+}
+
+infer_delimiter <- function(delimiter, x, ext = NULL) {
+  if (!is.null(delimiter)) {
+    return(delimiter)
+  }
+
+  fence_type <- attr(x, "fence_type", exact = TRUE)
+  if (!is.null(fence_type) && nzchar(fence_type) && fence_type != "none") {
+    return(fence_type)
+  }
+
+  if (!is.null(ext) && nzchar(ext)) {
+    mapped <- switch(
+      tolower(ext),
+      sql = "yaml_sql_block_compact",
+      py = "toml_pep723",
+      r = "yaml_roxy",
+      rmd = "yaml",
+      qmd = "yaml",
+      md = "yaml",
+      NULL
+    )
+    if (!is.null(mapped)) return(mapped)
+  }
+
+  "yaml"
 }

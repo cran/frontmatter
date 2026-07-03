@@ -1,3 +1,26 @@
+# frontmatter 0.3.0
+
+* `format_front_matter()` and `write_front_matter()` now infer the delimiter
+  automatically when `delimiter = NULL` (the new default). If `x` was returned
+  by `parse_front_matter()` or `read_front_matter()`, the original fence style
+  is preserved; otherwise `write_front_matter()` falls back to the file
+  extension of `path`, and finally to `"yaml"` (#8).
+
+* Added support for shebang lines (`#!`) at the start of files. When a file
+  begins with a shebang, the parser now recognizes front matter in
+  comment-wrapped formats (`# ---`, `#' ---`) and PEP 723 (`# /// script`)
+  immediately following the shebang (with zero or one blank lines in between).
+  The shebang line is included in the returned `body`. `format_front_matter()`
+  and `write_front_matter()` also move a leading shebang line above the front
+  matter block when writing (#5).
+
+* Added SQL front matter support with two comment styles: line comments
+  (`-- ---`/`-- +++`) and block comments in compact (`/* ---` ... `--- */`) and
+  expanded (`/*` + `---` ... `---` + `*/`) forms. Six new delimiter shortcuts
+  are available for `write_front_matter()`: `yaml_sql_line`,
+  `toml_sql_line`, `yaml_sql_block_compact`, `toml_sql_block_compact`,
+  `yaml_sql_block_expanded`, and `toml_sql_block_expanded` (#4).
+
 # frontmatter 0.2.0
 
 * New `format_front_matter()` and `write_front_matter()` functions for serializing documents with YAML or TOML front matter. These are the inverse of `parse_front_matter()` and `read_front_matter()`, enabling full roundtrip support. Supports all delimiter formats including standard (`---`, `+++`), comment-wrapped (`# ---`, `#' ---`), and PEP 723. Note that the roundtrip is not perfect; comments and formatting within the front matter content may not be preserved.
